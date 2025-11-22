@@ -5,6 +5,11 @@ function randomPic(size = 80) {
   return `https://picsum.photos/${size}?random=${Math.random()}`;
 }
 
+// Random online/offline status
+function randomStatus() {
+  return Math.random() > 0.5 ? "online" : "offline";
+}
+
 function navigate(page) {
   window.location.hash = page;
   render();
@@ -60,19 +65,26 @@ function chatListPage() {
       <input class='w-full p-3 border rounded-xl' placeholder='Search by chats'>
 
       <div class='space-y-4'>
-        ${users.map(name => `
+        ${users.map(name => {
+          const status = randomStatus();
+          const color = status === "online" ? "bg-green-500" : "bg-gray-400";
+
+          return `
           <div class='flex items-center gap-3 p-3 bg-white rounded-xl shadow cursor-pointer'
                onclick="navigate('inbox')">
 
-            <img src="${randomPic(60)}" class='w-12 h-12 rounded-full object-cover' />
+            <div class='relative'>
+              <img src="${randomPic(60)}" class='w-12 h-12 rounded-full object-cover' />
+              <span class='absolute bottom-0 right-0 w-3 h-3 ${color} rounded-full border-2 border-white'></span>
+            </div>
 
             <div>
               <p class='font-bold'>${name}</p>
-              <p class='text-sm text-gray-600'>Yeah, ikr</p>
+              <p class='text-sm text-gray-600'>${status === "online" ? "Online" : "Offline"}</p>
             </div>
 
-          </div>
-        `).join('')}
+          </div>`;
+        }).join('')}
       </div>
     </div>`;
 }
@@ -83,9 +95,20 @@ function inboxPage() {
     <div class='space-y-5'>
       <button onclick="navigate('chats')" class='text-purple-700 text-xl'>⬅</button>
 
+      <div class='flex items-center gap-3'>
+        <div class='relative'>
+          <img src="${randomPic(60)}" class='w-12 h-12 rounded-full object-cover' />
+          <span class='absolute bottom-0 right-0 w-3 h-3 bg-green-500 rounded-full border-2 border-white'></span>
+        </div>
+        <div>
+          <p class='font-bold text-lg'>Chat User</p>
+          <p class='text-green-600 text-sm'>Online now</p>
+        </div>
+      </div>
+
       <div id='chatBody'
            class='bg-white p-4 rounded-xl space-y-4 shadow'
-           style='height:70vh;overflow-y:auto;'>
+           style='height:60vh;overflow-y:auto;'>
 
         <p class='bg-gray-100 p-3 rounded-xl w-fit'>
           Hey! It's morning here in Tokyo 🙂
@@ -104,7 +127,7 @@ function inboxPage() {
     </div>`;
 }
 
-// Send message inside inbox
+// Send Message
 function sendMessage() {
   const input = document.getElementById('msgInput');
   const text = input.value.trim();
