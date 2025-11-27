@@ -305,9 +305,9 @@ async function chatListPage() {
   }));
   
   return `
-    <div class='w-full max-w-5xl mx-auto h-[90vh] md:h-[85vh] bg-white rounded-3xl shadow-2xl overflow-hidden flex flex-col'>
+    <div class='w-full max-w-5xl mx-auto h-[100vh] h-[100dvh] md:h-[85vh] bg-white rounded-none md:rounded-3xl shadow-2xl overflow-hidden flex flex-col'>
       <!-- Header -->
-      <div class='bg-gradient-to-r from-purple-500 to-blue-500 p-4 md:p-6'>
+      <div class='bg-gradient-to-r from-purple-500 to-blue-500 p-4 md:p-6 flex-shrink-0'>
         <div class='flex justify-between items-center'>
           <div>
             <h1 class='text-2xl md:text-3xl font-bold text-white'>Chats</h1>
@@ -381,9 +381,9 @@ async function inboxPage() {
   startMessagePolling();
   
   return `
-    <div class='w-full max-w-5xl mx-auto h-[90vh] md:h-[85vh] bg-white rounded-3xl shadow-2xl overflow-hidden flex flex-col'>
+    <div class='w-full max-w-5xl mx-auto h-[100vh] h-[100dvh] md:h-[85vh] bg-white rounded-none md:rounded-3xl shadow-2xl overflow-hidden flex flex-col'>
       <!-- Header -->
-      <div class='bg-gradient-to-r from-purple-500 to-blue-500 p-4 md:p-5 flex items-center gap-3 md:gap-4'>
+      <div class='bg-gradient-to-r from-purple-500 to-blue-500 p-4 md:p-5 flex items-center gap-3 md:gap-4 flex-shrink-0'>
         <button onclick="navigate('chats')" 
                 class='w-10 h-10 bg-white/20 hover:bg-white/30 rounded-full flex items-center justify-center text-white backdrop-blur transition flex-shrink-0'>
           ←
@@ -404,7 +404,8 @@ async function inboxPage() {
 
       <!-- Chat Body -->
       <div id='chatBody'
-           class='flex-1 overflow-y-auto p-4 md:p-6 bg-gradient-to-br from-gray-50 to-purple-50'>
+           class='flex-1 overflow-y-auto p-3 md:p-6 bg-gradient-to-br from-gray-50 to-purple-50'
+           style='overscroll-behavior: contain;'>
         <div class='space-y-3 md:space-y-4'>
           ${conversation.length === 0 ? `
             <div class='text-center py-12'>
@@ -450,11 +451,11 @@ async function inboxPage() {
       </div>
 
       <!-- Input Area -->
-      <div class='p-4 md:p-5 bg-white border-t border-gray-200'>
+      <div class='p-3 md:p-5 bg-white border-t border-gray-200 flex-shrink-0' style='padding-bottom: max(12px, env(safe-area-inset-bottom));'>
         <div class='flex items-end gap-2 md:gap-3'>
           <input type='file' id='imageInput' accept='image/*' class='hidden' onchange='handleImageSelect(event)' />
           <button onclick='document.getElementById("imageInput").click()' 
-                  class='w-11 h-11 md:w-12 md:h-12 bg-gradient-to-br from-gray-100 to-gray-200 text-gray-600 rounded-2xl hover:from-gray-200 hover:to-gray-300 flex items-center justify-center text-xl md:text-2xl shadow-sm transition flex-shrink-0'>
+                  class='w-10 h-10 md:w-12 md:h-12 bg-gradient-to-br from-gray-100 to-gray-200 text-gray-600 rounded-2xl hover:from-gray-200 hover:to-gray-300 flex items-center justify-center text-xl md:text-2xl shadow-sm transition flex-shrink-0'>
             📷
           </button>
           <div class='flex-1 bg-gray-100 rounded-2xl p-1 md:p-1.5'>
@@ -465,7 +466,7 @@ async function inboxPage() {
                    onkeypress="if(event.key==='Enter') handleSendMessage()" />
           </div>
           <button onclick='handleSendMessage()'
-                  class='w-11 h-11 md:w-12 md:h-12 bg-gradient-to-br from-purple-500 to-blue-500 text-white rounded-2xl hover:from-purple-600 hover:to-blue-600 flex items-center justify-center shadow-lg transform hover:scale-105 transition flex-shrink-0 text-xl'>
+                  class='w-10 h-10 md:w-12 md:h-12 bg-gradient-to-br from-purple-500 to-blue-500 text-white rounded-2xl hover:from-purple-600 hover:to-blue-600 flex items-center justify-center shadow-lg transform hover:scale-105 transition flex-shrink-0 text-xl'>
             ➤
           </button>
         </div>

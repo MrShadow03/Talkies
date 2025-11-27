@@ -56,6 +56,23 @@
   body {
     overflow: hidden;
   }
+  
+  /* Fix mobile viewport height issues */
+  #app {
+    height: 100vh;
+    height: 100dvh; /* Dynamic viewport height for mobile browsers */
+  }
+  
+  /* Ensure chat containers respect mobile viewport */
+  .chat-container {
+    max-height: 100vh;
+    max-height: 100dvh;
+  }
+  
+  /* Fix input area on mobile */
+  .input-area {
+    padding-bottom: env(safe-area-inset-bottom, 0px);
+  }
 }
 
 /* Custom animations for typing indicator */
