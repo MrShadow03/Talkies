@@ -2,11 +2,37 @@ const app = document.getElementById('app');
 let currentUser = null;
 let currentChatUser = null;
 let messageCheckInterval = null;
+let chatListUpdateInterval = null;
 
 // API Configuration - automatically detects if running locally or on server
 const API_URL = window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1'
   ? 'http://localhost:3000/api'
   : `${window.location.protocol}//${window.location.host}/api`;
+
+// Loading state
+let isLoading = false;
+
+function showLoading() {
+  isLoading = true;
+  const loadingOverlay = document.createElement('div');
+  loadingOverlay.id = 'loadingOverlay';
+  loadingOverlay.className = 'fixed inset-0 bg-black/20 backdrop-blur-sm flex items-center justify-center z-50 fade-in';
+  loadingOverlay.innerHTML = `
+    <div class='bg-white rounded-2xl p-6 shadow-2xl flex flex-col items-center gap-3'>
+      <div class='w-12 h-12 border-4 border-purple-500 border-t-transparent rounded-full spinner'></div>
+      <p class='text-gray-700 font-medium'>Loading...</p>
+    </div>
+  `;
+  document.body.appendChild(loadingOverlay);
+}
+
+function hideLoading() {
+  isLoading = false;
+  const overlay = document.getElementById('loadingOverlay');
+  if (overlay) {
+    overlay.remove();
+  }
+}
 
 // ==================== DATA LAYER (API) ====================
 
@@ -197,17 +223,35 @@ async function render() {
     return;
   }
   
-  if (page === 'login') {
-    if (getCurrentSession()) {
-      window.location.hash = 'chats';
-      app.innerHTML = await chatListPage();
-    } else {
-      app.innerHTML = loginPage();
-    }
+  // Show loading for navigation
+  if (page !== 'login') {
+    showLoading();
   }
-  if (page === 'chats') app.innerHTML = await chatListPage();
-  if (page === 'inbox') app.innerHTML = await inboxPage();
-  if (page === 'profile') app.innerHTML = await profilePage();
+  
+  try {
+    if (page === 'login') {
+      if (getCurrentSession()) {
+        window.location.hash = 'chats';
+        app.innerHTML = await chatListPage();
+      } else {
+        app.innerHTML = loginPage();
+      }
+    }
+    if (page === 'chats') {
+      app.innerHTML = await chatListPage();
+      startChatListPolling(); // Start real-time updates for chat list
+    }
+    if (page === 'inbox') {
+      stopChatListPolling(); // Stop chat list polling when in inbox
+      app.innerHTML = await inboxPage();
+    }
+    if (page === 'profile') {
+      stopChatListPolling(); // Stop chat list polling when in profile
+      app.innerHTML = await profilePage();
+    }
+  } finally {
+    hideLoading();
+  }
 }
 
 // Login Page
@@ -258,16 +302,25 @@ async function handleLogin() {
     return;
   }
   
-  let user = await getUserByEmail(email);
-  if (!user) {
-    user = await saveUser({ name, email });
-  } else {
-    user.name = name;
-    user = await saveUser(user);
-  }
+  showLoading();
   
-  setCurrentSession(user);
-  navigate('chats');
+  try {
+    let user = await getUserByEmail(email);
+    if (!user) {
+      user = await saveUser({ name, email });
+    } else {
+      user.name = name;
+      user = await saveUser(user);
+    }
+    
+    setCurrentSession(user);
+    navigate('chats');
+  } catch (error) {
+    errorMsg.textContent = 'Connection error. Please try again.';
+    errorMsg.classList.remove('hidden');
+  } finally {
+    hideLoading();
+  }
 }
 
 // Chat List Page
@@ -328,17 +381,19 @@ async function chatListPage() {
 
       <!-- Chat List -->
       <div class='flex-1 overflow-y-auto p-4 md:p-6'>
-        ${allUsers.length === 0 ? `
-          <div class='bg-gradient-to-br from-yellow-50 to-orange-50 border border-yellow-200 p-6 rounded-2xl text-center'>
-            <div class='text-5xl mb-4'>👋</div>
-            <p class='text-gray-700 font-medium'>No other users yet</p>
-            <p class='text-gray-600 text-sm mt-2'>Open another browser and create a new account to start chatting!</p>
-          </div>
-        ` : `
-          <div class='grid gap-3 md:gap-4'>
-            ${userListHTML.join('')}
-          </div>
-        `}
+        <div id='chatListContainer'>
+          ${allUsers.length === 0 ? `
+            <div class='bg-gradient-to-br from-yellow-50 to-orange-50 border border-yellow-200 p-6 rounded-2xl text-center'>
+              <div class='text-5xl mb-4'>👋</div>
+              <p class='text-gray-700 font-medium'>No other users yet</p>
+              <p class='text-gray-600 text-sm mt-2'>Open another browser and create a new account to start chatting!</p>
+            </div>
+          ` : `
+            <div class='grid gap-3 md:gap-4'>
+              ${userListHTML.join('')}
+            </div>
+          `}
+        </div>
       </div>
     </div>`;
 }
@@ -350,8 +405,126 @@ function openChat(userId) {
 
 async function handleLogout() {
   if (confirm('Are you sure you want to logout?')) {
+    showLoading();
     await clearSession();
+    hideLoading();
     navigate('login');
+  }
+}
+
+// Real-time chat list updates
+function startChatListPolling() {
+  // Clear any existing interval
+  stopChatListPolling();
+  
+  chatListUpdateInterval = setInterval(async () => {
+    const currentPage = window.location.hash.replace('#', '');
+    if (currentPage === 'chats') {
+      await updateChatList();
+    }
+  }, 5000); // Update every 5 seconds (reduced frequency for smoother experience)
+}
+
+function stopChatListPolling() {
+  if (chatListUpdateInterval) {
+    clearInterval(chatListUpdateInterval);
+    chatListUpdateInterval = null;
+  }
+}
+
+async function updateChatList() {
+  const currentUser = getCurrentSession();
+  if (!currentUser) return;
+  
+  const allUsers = (await getUsers()).filter(u => u.id !== currentUser.id);
+  const chatListContainer = document.getElementById('chatListContainer');
+  
+  if (!chatListContainer) return;
+  
+  // Get existing chat items
+  const existingGrid = chatListContainer.querySelector('.grid');
+  const existingItems = existingGrid ? Array.from(existingGrid.children) : [];
+  
+  if (allUsers.length === 0) {
+    chatListContainer.innerHTML = `
+      <div class='bg-gradient-to-br from-yellow-50 to-orange-50 border border-yellow-200 p-6 rounded-2xl text-center fade-in'>
+        <div class='text-5xl mb-4'>👋</div>
+        <p class='text-gray-700 font-medium'>No other users yet</p>
+        <p class='text-gray-600 text-sm mt-2'>Open another browser and create a new account to start chatting!</p>
+      </div>
+    `;
+    return;
+  }
+  
+  // Build user data
+  const userData = await Promise.all(allUsers.map(async user => {
+    const online = await isUserOnline(user.id);
+    const lastMsg = await getLastMessage(currentUser.id, user.id);
+    const unreadCount = await getUnreadCount(currentUser.id, user.id);
+    return { user, online, lastMsg, unreadCount };
+  }));
+  
+  // Create or get grid container
+  if (!existingGrid) {
+    chatListContainer.innerHTML = `<div class='grid gap-3 md:gap-4'></div>`;
+  }
+  
+  const grid = chatListContainer.querySelector('.grid');
+  
+  // Update each user item
+  userData.forEach((data, index) => {
+    const { user, online, lastMsg, unreadCount } = data;
+    const existingItem = existingItems[index];
+    
+    // Check if we need to update this item
+    const onlineStatus = existingItem?.querySelector('.absolute.bottom-0.right-0');
+    const statusText = existingItem?.querySelectorAll('.text-sm')[0];
+    const unreadBadge = existingItem?.querySelector('.bg-gradient-to-r.from-purple-500');
+    const lastMsgText = existingItem?.querySelector('.text-xs.text-gray-500.truncate');
+    
+    const needsUpdate = !existingItem ||
+      onlineStatus?.classList.contains('bg-green-500') !== online ||
+      (unreadBadge?.textContent !== String(unreadCount)) ||
+      (unreadCount > 0 && !unreadBadge) ||
+      (unreadCount === 0 && unreadBadge);
+    
+    if (needsUpdate) {
+      const itemHTML = `
+        <div class='flex items-center gap-3 md:gap-4 p-4 bg-gradient-to-r from-gray-50 to-white rounded-2xl shadow-sm hover:shadow-md border border-gray-100 cursor-pointer transform hover:scale-[1.02] transition-all duration-200 fade-in'
+             onclick="openChat('${user.id}')"
+             data-user-id="${user.id}">
+
+          <div class='relative flex-shrink-0'>
+            <div class='w-12 h-12 md:w-14 md:h-14 rounded-2xl bg-gradient-to-br from-purple-400 to-blue-400 flex items-center justify-center text-white text-xl md:text-2xl font-bold shadow-lg'>
+              ${user.name.charAt(0).toUpperCase()}
+            </div>
+            <span class='absolute bottom-0 right-0 w-4 h-4 ${online ? "bg-green-500" : "bg-gray-400"} rounded-full border-2 border-white shadow transition-colors duration-300'></span>
+          </div>
+
+          <div class='flex-1 min-w-0'>
+            <div class='flex justify-between items-start mb-1'>
+              <p class='font-bold text-gray-800 text-base md:text-lg truncate'>${user.name}</p>
+              ${unreadCount > 0 ? `<span class='bg-gradient-to-r from-purple-500 to-blue-500 text-white text-xs font-semibold rounded-full px-2.5 py-1 ml-2 flex-shrink-0 fade-in'>${unreadCount}</span>` : ''}
+            </div>
+            <p class='text-sm ${online ? "text-green-600 font-medium" : "text-gray-500"} transition-colors duration-300'>${online ? "🟢 Online" : "⚫ Offline"}</p>
+            ${lastMsg ? `<p class='text-xs text-gray-500 truncate mt-1'>${lastMsg.fromUserId === currentUser.id ? '✓ You: ' : ''}${lastMsg.type === 'image' ? '📷 Image' : lastMsg.text}</p>` : ''}
+          </div>
+
+        </div>`;
+      
+      if (existingItem) {
+        existingItem.outerHTML = itemHTML;
+      } else {
+        grid.innerHTML += itemHTML;
+      }
+    }
+  });
+  
+  // Remove extra items if users list got smaller
+  if (existingItems.length > userData.length) {
+    for (let i = userData.length; i < existingItems.length; i++) {
+      existingItems[i]?.remove();
+    }
   }
 }
 
@@ -419,7 +592,7 @@ async function inboxPage() {
             
             if (msg.type === 'image') {
               return `
-                <div class='flex ${isMine ? "justify-end" : "justify-start"} message-enter'>
+                <div data-msg-id='${msg.id}' class='flex ${isMine ? "justify-end" : "justify-start"} fade-in'>
                   <div class='${isMine ? "ml-auto" : "mr-auto"} max-w-[80%] md:max-w-[60%]'>
                     <img src="${msg.text}" class='rounded-2xl max-h-64 md:max-h-96 object-cover shadow-lg border-2 ${isMine ? "border-purple-200" : "border-gray-200"}' />
                     <p class='text-xs ${isMine ? "text-right" : ""} text-gray-500 mt-1.5 px-2'>${time}</p>
@@ -429,7 +602,7 @@ async function inboxPage() {
             }
             
             return `
-              <div class='flex ${isMine ? "justify-end" : "justify-start"} message-enter'>
+              <div data-msg-id='${msg.id}' class='flex ${isMine ? "justify-end" : "justify-start"} fade-in'>
                 <div class='${isMine ? "bg-gradient-to-br from-purple-500 to-blue-500 text-white ml-auto" : "bg-white text-gray-800 border border-gray-200"} p-3 md:p-4 rounded-2xl max-w-[80%] md:max-w-[60%] shadow-md'>
                   <p class='break-words text-sm md:text-base'>${msg.text}</p>
                   <p class='text-xs ${isMine ? "text-purple-100" : "text-gray-500"} mt-1'>${time}</p>
@@ -479,20 +652,33 @@ async function handleSendMessage() {
   const text = input.value.trim();
   if (!text || !currentChatUser) return;
   
-  const currentUser = getCurrentSession();
-  await sendMessage(currentUser.id, currentChatUser, text);
+  const sendButton = document.querySelector('[onclick="handleSendMessage()"]');
+  const originalContent = sendButton.innerHTML;
   
-  // Clear typing indicator
-  await setUserTyping(currentUser.id, currentChatUser, false);
+  // Show loading state
+  sendButton.innerHTML = '<div class="w-5 h-5 border-2 border-white border-t-transparent rounded-full spinner"></div>';
+  sendButton.disabled = true;
   
-  input.value = '';
-  await updateChatMessages();
-  
-  // Ensure scroll to bottom after sending
-  setTimeout(() => {
-    const chatBody = document.getElementById('chatBody');
-    if (chatBody) chatBody.scrollTop = chatBody.scrollHeight;
-  }, 150);
+  try {
+    const currentUser = getCurrentSession();
+    await sendMessage(currentUser.id, currentChatUser, text);
+    
+    // Clear typing indicator
+    await setUserTyping(currentUser.id, currentChatUser, false);
+    
+    input.value = '';
+    await updateChatMessages();
+    
+    // Ensure scroll to bottom after sending
+    setTimeout(() => {
+      const chatBody = document.getElementById('chatBody');
+      if (chatBody) chatBody.scrollTop = chatBody.scrollHeight;
+    }, 150);
+  } finally {
+    // Restore button
+    sendButton.innerHTML = originalContent;
+    sendButton.disabled = false;
+  }
 }
 
 let typingTimeout = null;
@@ -525,16 +711,23 @@ async function handleImageSelect(event) {
     return;
   }
   
+  // Show loading
+  showLoading();
+  
   const reader = new FileReader();
   reader.onload = async function(e) {
-    const currentUser = getCurrentSession();
-    await sendImageMessage(currentUser.id, currentChatUser, e.target.result);
-    await updateChatMessages();
-    
-    setTimeout(() => {
-      const chatBody = document.getElementById('chatBody');
-      if (chatBody) chatBody.scrollTop = chatBody.scrollHeight;
-    }, 150);
+    try {
+      const currentUser = getCurrentSession();
+      await sendImageMessage(currentUser.id, currentChatUser, e.target.result);
+      await updateChatMessages();
+      
+      setTimeout(() => {
+        const chatBody = document.getElementById('chatBody');
+        if (chatBody) chatBody.scrollTop = chatBody.scrollHeight;
+      }, 150);
+    } finally {
+      hideLoading();
+    }
   };
   
   reader.readAsDataURL(file);
@@ -668,51 +861,96 @@ async function updateChatMessages() {
   
   await markMessagesAsRead(currentUser.id, chatUser.id);
   
-  chatBody.innerHTML = `<div class='space-y-3 md:space-y-4'>${conversation.length === 0 ? `
-    <div class='text-center py-12'>
-      <div class='text-5xl mb-4'>💬</div>
-      <p class='text-gray-500 font-medium'>No messages yet</p>
-      <p class='text-gray-400 text-sm mt-2'>Start the conversation!</p>
-    </div>
-  ` : conversation.map(msg => {
-    const isMine = msg.fromUserId === currentUser.id;
-    const time = new Date(msg.timestamp).toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit' });
+  // Get existing messages container
+  let messagesContainer = chatBody.querySelector('.space-y-3');
+  if (!messagesContainer) {
+    messagesContainer = document.createElement('div');
+    messagesContainer.className = 'space-y-3 md:space-y-4';
+    chatBody.appendChild(messagesContainer);
+  }
+  
+  // Get existing message elements
+  const existingMessages = messagesContainer.querySelectorAll('[data-msg-id]');
+  const existingIds = new Set(Array.from(existingMessages).map(el => el.dataset.msgId));
+  
+  // Track scroll position
+  const wasScrolledToBottom = chatBody.scrollHeight - chatBody.scrollTop <= chatBody.clientHeight + 100;
+  
+  if (conversation.length === 0) {
+    messagesContainer.innerHTML = `
+      <div class='text-center py-12 fade-in'>
+        <div class='text-5xl mb-4'>💬</div>
+        <p class='text-gray-500 font-medium'>No messages yet</p>
+        <p class='text-gray-400 text-sm mt-2'>Start the conversation!</p>
+      </div>
+    `;
+  } else {
+    // Remove empty state if it exists
+    const emptyState = messagesContainer.querySelector('.text-center.py-12');
+    if (emptyState) emptyState.remove();
     
-    if (msg.type === 'image') {
-      return `
-        <div class='flex ${isMine ? "justify-end" : "justify-start"} message-enter'>
-          <div class='${isMine ? "ml-auto" : "mr-auto"} max-w-[80%] md:max-w-[60%]'>
-            <img src="${msg.text}" class='rounded-2xl max-h-64 md:max-h-96 object-cover shadow-lg border-2 ${isMine ? "border-purple-200" : "border-gray-200"}' />
-            <p class='text-xs ${isMine ? "text-right" : ""} text-gray-500 mt-1.5 px-2'>${time}</p>
+    // Add only new messages
+    conversation.forEach(msg => {
+      if (!existingIds.has(msg.id)) {
+        const isMine = msg.fromUserId === currentUser.id;
+        const time = new Date(msg.timestamp).toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit' });
+        
+        const messageDiv = document.createElement('div');
+        messageDiv.setAttribute('data-msg-id', msg.id);
+        
+        if (msg.type === 'image') {
+          messageDiv.className = `flex ${isMine ? "justify-end" : "justify-start"} fade-in`;
+          messageDiv.innerHTML = `
+            <div class='${isMine ? "ml-auto" : "mr-auto"} max-w-[80%] md:max-w-[60%]'>
+              <img src="${msg.text}" class='rounded-2xl max-h-64 md:max-h-96 object-cover shadow-lg border-2 ${isMine ? "border-purple-200" : "border-gray-200"}' />
+              <p class='text-xs ${isMine ? "text-right" : ""} text-gray-500 mt-1.5 px-2'>${time}</p>
+            </div>
+          `;
+        } else {
+          messageDiv.className = `flex ${isMine ? "justify-end" : "justify-start"} fade-in`;
+          messageDiv.innerHTML = `
+            <div class='${isMine ? "bg-gradient-to-br from-purple-500 to-blue-500 text-white ml-auto" : "bg-white text-gray-800 border border-gray-200"} p-3 md:p-4 rounded-2xl max-w-[80%] md:max-w-[60%] shadow-md'>
+              <p class='break-words text-sm md:text-base'>${msg.text}</p>
+              <p class='text-xs ${isMine ? "text-purple-100" : "text-gray-500"} mt-1'>${time}</p>
+            </div>
+          `;
+        }
+        
+        // Insert before typing indicator if it exists, otherwise append
+        const typingIndicator = messagesContainer.querySelector('#typingIndicator');
+        if (typingIndicator) {
+          messagesContainer.insertBefore(messageDiv, typingIndicator);
+        } else {
+          messagesContainer.appendChild(messageDiv);
+        }
+      }
+    });
+    
+    // Ensure typing indicator is at the end
+    let typingIndicator = messagesContainer.querySelector('#typingIndicator');
+    if (!typingIndicator) {
+      typingIndicator = document.createElement('div');
+      typingIndicator.id = 'typingIndicator';
+      typingIndicator.className = 'hidden flex justify-start';
+      typingIndicator.innerHTML = `
+        <div class='bg-white border border-gray-200 p-4 rounded-2xl shadow-md'>
+          <div class='flex gap-1.5'>
+            <span class='w-2 h-2 bg-gray-400 rounded-full animate-bounce' style='animation-delay: 0ms'></span>
+            <span class='w-2 h-2 bg-gray-400 rounded-full animate-bounce' style='animation-delay: 150ms'></span>
+            <span class='w-2 h-2 bg-gray-400 rounded-full animate-bounce' style='animation-delay: 300ms'></span>
           </div>
         </div>
       `;
+      messagesContainer.appendChild(typingIndicator);
     }
-    
-    return `
-      <div class='flex ${isMine ? "justify-end" : "justify-start"} message-enter'>
-        <div class='${isMine ? "bg-gradient-to-br from-purple-500 to-blue-500 text-white ml-auto" : "bg-white text-gray-800 border border-gray-200"} p-3 md:p-4 rounded-2xl max-w-[80%] md:max-w-[60%] shadow-md'>
-          <p class='break-words text-sm md:text-base'>${msg.text}</p>
-          <p class='text-xs ${isMine ? "text-purple-100" : "text-gray-500"} mt-1'>${time}</p>
-        </div>
-      </div>
-    `;
-  }).join('')}
+  }
   
-  <div id='typingIndicator' class='hidden flex justify-start'>
-    <div class='bg-white border border-gray-200 p-4 rounded-2xl shadow-md'>
-      <div class='flex gap-1.5'>
-        <span class='w-2 h-2 bg-gray-400 rounded-full animate-bounce' style='animation-delay: 0ms'></span>
-        <span class='w-2 h-2 bg-gray-400 rounded-full animate-bounce' style='animation-delay: 150ms'></span>
-        <span class='w-2 h-2 bg-gray-400 rounded-full animate-bounce' style='animation-delay: 300ms'></span>
-      </div>
-    </div>
-  </div>
-  </div>`;
-  
-  setTimeout(() => {
-    chatBody.scrollTop = chatBody.scrollHeight;
-  }, 100);
+  // Auto-scroll to bottom if user was already at bottom or if new message is from current user
+  if (wasScrolledToBottom || conversation[conversation.length - 1]?.fromUserId === currentUser.id) {
+    setTimeout(() => {
+      chatBody.scrollTop = chatBody.scrollHeight;
+    }, 50);
+  }
 }
 
 // Helper function to update online status indicator
@@ -788,6 +1026,7 @@ window.addEventListener('beforeunload', () => {
   if (messageCheckInterval) {
     clearInterval(messageCheckInterval);
   }
+  stopChatListPolling();
   stopHeartbeat();
 });
 

@@ -13,6 +13,24 @@ app.use(express.static(__dirname));
 
 // Data file path
 const DATA_FILE = path.join(__dirname, 'data.json');
+const BACKUP_FILE = path.join(__dirname, 'data.backup.json');
+
+// Create backup of current data
+async function createBackup() {
+  if (dataCache) {
+    try {
+      await fs.writeFile(BACKUP_FILE, JSON.stringify(dataCache, null, 2));
+      console.log('💾 Backup created successfully');
+    } catch (error) {
+      console.error('❌ Failed to create backup:', error.message);
+    }
+  }
+}
+
+// In-memory cache for better performance
+let dataCache = null;
+let lastFileWrite = 0;
+const WRITE_DEBOUNCE = 500; // Write to file max once per 500ms
 
 // Initialize data structure
 const initData = {
@@ -26,30 +44,81 @@ const initData = {
 async function initDataFile() {
   try {
     await fs.access(DATA_FILE);
-  } catch {
-    await fs.writeFile(DATA_FILE, JSON.stringify(initData, null, 2));
-  }
-}
-
-// Read data
-async function readData() {
-  try {
+    // File exists, load it
     const data = await fs.readFile(DATA_FILE, 'utf8');
-    return JSON.parse(data);
+    dataCache = JSON.parse(data);
+    console.log(`📁 Loaded existing data from file (${dataCache.users.length} users, ${dataCache.messages.length} messages)`);
   } catch (error) {
-    return initData;
+    // Try to load backup
+    try {
+      await fs.access(BACKUP_FILE);
+      const data = await fs.readFile(BACKUP_FILE, 'utf8');
+      dataCache = JSON.parse(data);
+      console.log(`📁 Loaded data from backup (${dataCache.users.length} users, ${dataCache.messages.length} messages)`);
+      await writeDataToFile(dataCache); // Restore main file
+    } catch {
+      // No backup either, create new
+      dataCache = { ...initData };
+      await writeDataToFile(dataCache);
+      console.log('📁 Created new data file');
+    }
   }
 }
 
-// Write data
+// Read data from cache
+async function readData() {
+  if (!dataCache) {
+    await initDataFile();
+  }
+  return dataCache;
+}
+
+// Write data to file (debounced)
+let writeTimeout = null;
 async function writeData(data) {
-  await fs.writeFile(DATA_FILE, JSON.stringify(data, null, 2));
+  dataCache = data;
+  
+  // Debounce writes to prevent excessive I/O
+  if (writeTimeout) {
+    clearTimeout(writeTimeout);
+  }
+  
+  writeTimeout = setTimeout(async () => {
+    await writeDataToFile(data);
+  }, WRITE_DEBOUNCE);
+}
+
+// Actual file write operation
+async function writeDataToFile(data) {
+  try {
+    const now = Date.now();
+    if (now - lastFileWrite < 100) {
+      // Too soon, skip this write
+      return;
+    }
+    
+    // Create backup before critical writes
+    if (dataCache && dataCache.users && dataCache.users.length > 0) {
+      await createBackup();
+    }
+    
+    lastFileWrite = now;
+    await fs.writeFile(DATA_FILE, JSON.stringify(data, null, 2));
+  } catch (error) {
+    console.error('❌ Error writing to file:', error);
+  }
 }
 
 // Clean stale online users (offline for more than 10 seconds)
 function cleanStaleUsers(data) {
   const now = Date.now();
+  const before = data.onlineUsers.length;
   data.onlineUsers = data.onlineUsers.filter(u => now - u.timestamp < 10000);
+  
+  if (before !== data.onlineUsers.length) {
+    console.log(`🧹 Cleaned ${before - data.onlineUsers.length} stale online users`);
+  }
+  
   return data;
 }
 
@@ -59,6 +128,16 @@ function cleanStaleTyping(data) {
   data.typingUsers = data.typingUsers.filter(t => now - t.timestamp < 3000);
   return data;
 }
+
+// Periodic cleanup and save
+setInterval(async () => {
+  if (dataCache) {
+    cleanStaleUsers(dataCache);
+    cleanStaleTyping(dataCache);
+    await writeDataToFile(dataCache);
+    console.log('💾 Auto-saved data to file');
+  }
+}, 30000); // Every 30 seconds
 
 // API Routes
 
@@ -251,5 +330,25 @@ initDataFile().then(() => {
   app.listen(PORT, () => {
     console.log(`🚀 Talkie server running on http://localhost:${PORT}`);
     console.log(`📱 Open http://localhost:${PORT} in multiple browsers to test!`);
+    console.log(`💾 Data persistence enabled with auto-save every 30s`);
   });
+});
+
+// Graceful shutdown - save data before exit
+process.on('SIGINT', async () => {
+  console.log('\n⏹️  Shutting down gracefully...');
+  if (dataCache) {
+    await writeDataToFile(dataCache);
+    console.log('💾 Data saved to file');
+  }
+  process.exit(0);
+});
+
+process.on('SIGTERM', async () => {
+  console.log('\n⏹️  Shutting down gracefully...');
+  if (dataCache) {
+    await writeDataToFile(dataCache);
+    console.log('💾 Data saved to file');
+  }
+  process.exit(0);
 });
