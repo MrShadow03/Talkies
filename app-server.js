@@ -314,8 +314,10 @@ async function handleLogin() {
     }
     
     setCurrentSession(user);
+    soundManager.login();
     navigate('chats');
   } catch (error) {
+    soundManager.error();
     errorMsg.textContent = 'Connection error. Please try again.';
     errorMsg.classList.remove('hidden');
   } finally {
@@ -336,7 +338,7 @@ async function chatListPage() {
     
     return `
       <div class='flex items-center gap-3 md:gap-4 p-4 bg-gradient-to-r from-gray-50 to-white rounded-2xl shadow-sm hover:shadow-md border border-gray-100 cursor-pointer transform hover:scale-[1.02] transition'
-           onclick="openChat('${user.id}')">
+           onclick="soundManager.click(); openChat('${user.id}')">
 
         <div class='relative flex-shrink-0'>
           <div class='w-12 h-12 md:w-14 md:h-14 rounded-2xl bg-gradient-to-br from-purple-400 to-blue-400 flex items-center justify-center text-white text-xl md:text-2xl font-bold shadow-lg'>
@@ -445,6 +447,9 @@ async function updateChatList() {
   const existingGrid = chatListContainer.querySelector('.grid');
   const existingItems = existingGrid ? Array.from(existingGrid.children) : [];
   
+  // Track if there are new unread messages
+  let hasNewUnread = false;
+  
   if (allUsers.length === 0) {
     chatListContainer.innerHTML = `
       <div class='bg-gradient-to-br from-yellow-50 to-orange-50 border border-yellow-200 p-6 rounded-2xl text-center fade-in'>
@@ -482,6 +487,12 @@ async function updateChatList() {
     const unreadBadge = existingItem?.querySelector('.bg-gradient-to-r.from-purple-500');
     const lastMsgText = existingItem?.querySelector('.text-xs.text-gray-500.truncate');
     
+    // Check if this is a new unread message
+    const oldUnreadCount = unreadBadge ? parseInt(unreadBadge.textContent) : 0;
+    if (unreadCount > oldUnreadCount && unreadCount > 0) {
+      hasNewUnread = true;
+    }
+    
     const needsUpdate = !existingItem ||
       onlineStatus?.classList.contains('bg-green-500') !== online ||
       (unreadBadge?.textContent !== String(unreadCount)) ||
@@ -491,7 +502,7 @@ async function updateChatList() {
     if (needsUpdate) {
       const itemHTML = `
         <div class='flex items-center gap-3 md:gap-4 p-4 bg-gradient-to-r from-gray-50 to-white rounded-2xl shadow-sm hover:shadow-md border border-gray-100 cursor-pointer transform hover:scale-[1.02] transition-all duration-200 fade-in'
-             onclick="openChat('${user.id}')"
+             onclick="soundManager.click(); openChat('${user.id}')"
              data-user-id="${user.id}">
 
           <div class='relative flex-shrink-0'>
@@ -525,6 +536,11 @@ async function updateChatList() {
     for (let i = userData.length; i < existingItems.length; i++) {
       existingItems[i]?.remove();
     }
+  }
+  
+  // Play notification sound if there are new unread messages
+  if (hasNewUnread) {
+    soundManager.notification();
   }
 }
 
@@ -663,6 +679,9 @@ async function handleSendMessage() {
     const currentUser = getCurrentSession();
     await sendMessage(currentUser.id, currentChatUser, text);
     
+    // Play sent message sound
+    soundManager.messageSent();
+    
     // Clear typing indicator
     await setUserTyping(currentUser.id, currentChatUser, false);
     
@@ -719,6 +738,7 @@ async function handleImageSelect(event) {
     try {
       const currentUser = getCurrentSession();
       await sendImageMessage(currentUser.id, currentChatUser, e.target.result);
+      soundManager.messageSent();
       await updateChatMessages();
       
       setTimeout(() => {
@@ -746,7 +766,14 @@ function startMessagePolling() {
       const conversation = await getConversation(currentUser.id, currentChatUser);
       
       if (conversation.length !== lastMessageCount) {
+        const hasNewMessages = conversation.length > lastMessageCount;
         lastMessageCount = conversation.length;
+        
+        // Play received message sound only for incoming messages
+        if (hasNewMessages && conversation[conversation.length - 1]?.fromUserId !== currentUser.id) {
+          soundManager.messageReceived();
+        }
+        
         await updateChatMessages();
       }
       
@@ -833,6 +860,23 @@ async function profilePage() {
               <p class='text-xs text-purple-100'>Member Since</p>
               <p class='font-medium'>${new Date(currentUser.joinedAt).toLocaleDateString('en-US', { year: 'numeric', month: 'long', day: 'numeric' })}</p>
             </div>
+          </div>
+        </div>
+
+        <!-- Sound Toggle -->
+        <div class='bg-gray-50 border border-gray-200 p-5 rounded-2xl'>
+          <div class='flex items-center justify-between'>
+            <div class='flex items-center gap-3'>
+              <div class='w-10 h-10 bg-gradient-to-br from-purple-400 to-blue-400 rounded-xl flex items-center justify-center text-white'>🔊</div>
+              <div>
+                <p class='font-semibold text-gray-800'>Sound Effects</p>
+                <p class='text-xs text-gray-500'>Message notifications & sounds</p>
+              </div>
+            </div>
+            <button onclick="toggleSound()" id="soundToggle"
+                    class='w-14 h-8 rounded-full transition-colors duration-300 flex items-center ${soundManager.enabled ? "bg-gradient-to-r from-purple-500 to-blue-500" : "bg-gray-300"}'>
+              <div class='w-6 h-6 bg-white rounded-full shadow-md transform transition-transform duration-300 ${soundManager.enabled ? "translate-x-8" : "translate-x-1"}'></div>
+            </button>
           </div>
         </div>
 
@@ -1029,6 +1073,24 @@ window.addEventListener('beforeunload', () => {
   stopChatListPolling();
   stopHeartbeat();
 });
+
+// Toggle sound function
+function toggleSound() {
+  const enabled = soundManager.toggle();
+  soundManager.click();
+  
+  // Update UI
+  const button = document.getElementById('soundToggle');
+  if (button) {
+    if (enabled) {
+      button.className = 'w-14 h-8 rounded-full transition-colors duration-300 flex items-center bg-gradient-to-r from-purple-500 to-blue-500';
+      button.innerHTML = '<div class="w-6 h-6 bg-white rounded-full shadow-md transform transition-transform duration-300 translate-x-8"></div>';
+    } else {
+      button.className = 'w-14 h-8 rounded-full transition-colors duration-300 flex items-center bg-gray-300';
+      button.innerHTML = '<div class="w-6 h-6 bg-white rounded-full shadow-md transform transition-transform duration-300 translate-x-1"></div>';
+    }
+  }
+}
 
 // Initialize
 currentUser = getCurrentSession();
