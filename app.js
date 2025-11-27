@@ -811,11 +811,21 @@ window.addEventListener('storage', (e) => {
     const currentPage = window.location.hash.replace('#', '');
     const update = JSON.parse(e.newValue);
     
-    if (update.type === 'new_message' || update.type === 'online_status') {
-      // Re-render current page to show updates
-      if (currentPage === 'chats' || currentPage === 'inbox') {
+    if (update.type === 'new_message') {
+      if (currentPage === 'chats') {
         render();
+      } else if (currentPage === 'inbox') {
+        updateChatMessages();
+        // Ensure scroll happens in inactive tabs too
+        setTimeout(() => {
+          const chatBody = document.getElementById('chatBody');
+          if (chatBody) chatBody.scrollTop = chatBody.scrollHeight;
+        }, 150);
       }
+    }
+    
+    if (update.type === 'online_status' && (currentPage === 'chats' || currentPage === 'inbox')) {
+      render();
     }
     
     if (update.type === 'typing_status' && currentPage === 'inbox') {
